@@ -235,6 +235,41 @@ against Python output on shared `fixtures/` — the two ports cannot silently dr
 > (run and tested here) the Rust code is review-quality, not build-verified.
 > Expect to fix minor compile errors on first `cargo build`.
 
+### Native retrieval ecosystem (`rust/src/indexer/`)
+
+A dependency-free retrieval layer, built as three composable filters behind a
+shared `Filter` / `PipelineContext` abstraction, chained by `RetrievalEngine`:
+
+| Subsystem | File | Role |
+| --- | --- | --- |
+| A | `ast_chunker.rs` | Hand-written scope parsers for Rust, Python, JS/TS, Go |
+| B | `ppr_graph.rs` | Personalized PageRank over the call/containment graph |
+| C | `rrf_blender.rs` | Weighted reciprocal rank fusion + proximity merging |
+
+No tree-sitter and no new crates — Phase 3 adds zero dependencies.
+
+The chunker runs `mask_source` before any brace or indent counting, blanking
+string and comment interiors while preserving length and line structure, so a
+`}` inside a string can never corrupt a scope boundary and coordinates stay
+exact. Chunks carry a 256-dim hashed bag-of-features embedding. **This is
+lexical, not semantic** — there is no model behind it, and it will not match
+synonyms.
+
+Two tuning choices are deliberately non-textbook and should not be "corrected":
+
+* **PPR damping is 0.6, not 0.85.** On a small, bidirectionally-traversed code
+  graph, 0.85 lets the most *central* node outrank the seed, which silently
+  turns personalized PageRank into global PageRank. `max_iterations` is 200
+  because reaching `tol=1e-9` needs ~132 iterations, and the old cap of 100
+  meant `converged` was never true.
+* **Merged blocks take the max contributing score, never the sum**, so a block
+  cannot win by absorbing neighbours.
+
+`RetrievalEngine::query` drops PPR results scoring 0.0. PPR assigns a score to
+every node, and nodes the walk never reached come back as exactly zero; passing
+those to the blender still earns them a rank from array position, which drags
+unrelated files into the answer.
+
 ### Enabling CI
 
 The workflow lives at **`ci/github-actions-ci.yml`** instead of
@@ -246,6 +281,12 @@ mkdir -p .github/workflows
 git mv ci/github-actions-ci.yml .github/workflows/ci.yml
 git commit -m "Enable CI" && git push
 ```
+
+If you do this through the GitHub web UI instead, note that the filename box
+resolves **relative to the file's current directory**. Renaming from inside
+`ci/` to `.github/workflows/ci.yml` produces `ci/.github/workflows/ci.yml`,
+which Actions ignores. Prefix with `../` to escape, or just run the commands
+above locally.
 
 It builds and tests Python on 3.9/3.11/3.12, builds and tests the Rust crate,
 and runs the parity check — which is what will compile the Rust port for you.
@@ -271,6 +312,7 @@ test_retrieval.py     66 tests for the retrieval layer
 fixtures/             shared parity inputs
 scripts/check_parity.py
 rust/                 Rust port (lib + demo binary + tests)
+rust/src/indexer/     native retrieval: AST chunker + PPR graph + RRF blender
 ```
 
 ## Known limits
@@ -282,3 +324,8 @@ rust/                 Rust port (lib + demo binary + tests)
 * Log filtering is heuristic. Signal patterns are deliberately broad (it keeps
   more than it drops when uncertain), so a line containing "error" survives even
   if it is noise.
+* The retrieval AST layer in Python is Python-only; the Rust chunker covers
+  Rust, Python, JS/TS and Go. Both are line-and-brace scanners, not full
+  parsers — they handle the shapes real code takes, not every legal one.
+* Rust chunk embeddings are hashed lexical features, not a learned model.
+  Vector search there matches shared identifiers, not meaning.
