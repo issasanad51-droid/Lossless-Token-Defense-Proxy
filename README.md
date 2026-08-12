@@ -154,6 +154,68 @@ text are always measured with the same counter.
 
 ---
 
+## Hybrid structural retrieval (`retrieval/`)
+
+Compression makes each token cheaper. Retrieval decides which tokens get sent
+at all — the larger win on a real codebase. Three retrievers run concurrently
+and are blended with Reciprocal Rank Fusion:
+
+```bash
+python -m retrieval                          # demo over this repo
+python -m retrieval "how are tokens counted" # your own query
+```
+
+```
+vector lookup  ─┐
+AST structure  ─┼─> RRF ─> overlap grouping ─> top 3 densest blocks
+PPR            ─┘
+```
+
+| Stage | File | What it contributes |
+|---|---|---|
+| AST graph | `ast_graph.py` | Functions, classes, methods and the `CALLS`/`CONTAINS`/`INHERITS`/`IMPORTS` edges between them |
+| Vector lookup | `vector_store.py` | TF-IDF cosine over identifier-aware tokens (recall) |
+| Structural match | `hybrid.py` | Exact hits on names, signatures, decorators (precision) |
+| PPR | `ppr.py` | Personalized PageRank seeded on the query's own hits, scoring structural importance of dependencies |
+| Fusion | `rrf.py` | `1/(k+rank)` blend, overlap grouping, density ranking |
+
+Design points worth knowing:
+
+* **RRF needs no score calibration.** Cosine similarity, PageRank mass and
+  lexical overlap live on incompatible scales; fusing *ranks* sidesteps that
+  entirely, and cross-retriever agreement earns an explicit bonus.
+* **Overlapping spans are merged, not stacked.** A class, its method and the
+  enclosing module are three nodes covering the same lines. Enclosing spans are
+  dropped and their score folded into the specific children, so a module hit
+  can't drag a whole file into context. Returned blocks are guaranteed
+  non-overlapping — no line is ever sent twice.
+* **Density, not raw score.** Blocks rank by score per unit length with a
+  sublinear penalty and a minimum-length floor, so a tight function beats both
+  a sprawling module and a 2-line getter.
+* **PPR is seeded from the query's own hits**, which is what makes it
+  *personalized* rather than static global importance. Empty seeds return an
+  empty result rather than silently falling back to global PageRank.
+* **Failure isolation.** Each retriever runs in the thread pool; if one raises,
+  the error is recorded in `result.errors` and the other two still answer.
+
+On this repository a query returns ~3 blocks totalling 18–35 lines out of
+~3,400 — **99%+ of the codebase skipped** — with `result.explain()` showing
+which retrievers voted for each block and at what rank.
+
+> **Two honest caveats.** (1) The vector stage is a *lexical* TF-IDF vector
+> space, not a semantic embedding: no model could be downloaded in this
+> sandbox. It is a real vector-space retriever with real cosine scoring, and
+> `VectorStore(embedder=...)` swaps in any embedding function without touching
+> the rest of the pipeline — but it matches words, not meaning. (2) The three
+> retrievers run in threads. Here the work is CPU-bound Python, so threading
+> overlaps rather than parallelizes it; the structure pays off once the vector
+> stage becomes an I/O-bound call to an embedding API or vector DB.
+>
+> The AST layer is Python-only (it uses the `ast` module). Other languages need
+> a per-language parser behind the same `CodeSpan`/`CodeGraph` interface.
+
+---
+
 ## Rust port
 
 Same algorithms and guarantees, in `rust/`:
@@ -204,10 +266,11 @@ data_converter.py     JSON -> minimal YAML (+ inverse)
 tokenizer.py          tiktoken wrapper with offline fallback
 orchestrator.py       TokenDefenseProxy + runnable demo
 test_lossless.py      53 tests proving losslessness
+retrieval/            hybrid structural retrieval (AST graph + vectors + PPR + RRF)
+test_retrieval.py     66 tests for the retrieval layer
 fixtures/             shared parity inputs
 scripts/check_parity.py
 rust/                 Rust port (lib + demo binary + tests)
-.github/workflows/ci.yml
 ```
 
 ## Known limits

@@ -33,6 +33,9 @@ jobs:
       - name: Run the demo pipeline
         run: python orchestrator.py
 
+      - name: Run the retrieval demo
+        run: python -m retrieval
+
       - name: Machine-readable report
         run: python orchestrator.py --json
 
