@@ -1,0 +1,60 @@
+{
+  "service": {
+    "name": "payment-api",
+    "version": "2.14.3",
+    "environment": "production",
+    "region": "us-east-1",
+    "replicas": 6,
+    "healthy": true
+  },
+  "runtime": {
+    "python": "3.11.9",
+    "container": {
+      "image": "payment-api:2.14.3",
+      "memory_mb": 2048,
+      "cpu_millicores": 1500
+    },
+    "feature_flags": {
+      "new_retry_logic": false,
+      "async_refunds": true,
+      "verbose_tracing": false
+    }
+  },
+  "dependencies": [
+    {
+      "name": "postgres",
+      "version": "15.4",
+      "status": "healthy",
+      "latency_ms": 3
+    },
+    {
+      "name": "redis",
+      "version": "7.2",
+      "status": "healthy",
+      "latency_ms": 1
+    },
+    {
+      "name": "stripe-api",
+      "version": "2023-10-16",
+      "status": "degraded",
+      "latency_ms": 890
+    }
+  ],
+  "recent_errors": [
+    {
+      "code": "GATEWAY_TIMEOUT",
+      "count": 47,
+      "first_seen": "2024-03-11T09:14:22Z"
+    },
+    {
+      "code": "POOL_EXHAUSTED",
+      "count": 12,
+      "first_seen": "2024-03-11T09:31:05Z"
+    }
+  ],
+  "open_ports": [
+    8080,
+    8443,
+    9090
+  ]
+}
